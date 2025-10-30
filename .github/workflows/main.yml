@@ -1,49 +1,185 @@
-name: 1Gbps Proxy via Tailscale
-on: [workflow_dispatch]
+name: RDP + SOCKS5 Proxy - Optimized
+on:
+  workflow_dispatch:
 
 jobs:
-  proxy:
-    runs-on: ubuntu-latest
+  secure-rdp-proxy:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
     steps:
-    - name: Install Tailscale
-      run: |
-        curl -fsSL https://tailscale.com/install.sh | sh
-        sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --advertise-exit-node --accept-routes
-        
-    - name: Setup SOCKS5 Proxy
-      run: |
-        # Installer Dante SOCKS5
-        sudo apt-get update
-        sudo apt-get install -y dante-server
-        
-        # Configuration SOCKS5 simple
-        sudo tee /etc/danted.conf > /dev/null << EOF
-        logoutput: /var/log/sockd.log
-        internal: 0.0.0.0 port = 1080
-        external: tailscale0
-        method: username none
-        user.privileged: root
-        user.notprivileged: nobody
-        client pass {
-            from: 0.0.0.0/0 to: 0.0.0.0/0
-        }
-        pass {
-            from: 0.0.0.0/0 to: 0.0.0.0/0
-            protocol: tcp udp
-        }
-        EOF
-        
-        # Démarrer le serveur SOCKS
-        sudo systemctl restart danted
-        echo "✅ SOCKS5 server running on port 1080"
-        
-    - name: Show Connection Info
-      run: |
-        echo "🎯 Tailscale IP: $(tailscale ip --4)"
-        echo "🌐 Tailscale status:"
-        tailscale status
-        
-    - name: Keep alive
-      run: |
-        echo "🚀 Proxy ready! Connect via Tailscale IP above"
-        sleep 21600  # 6 heures max
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                           -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "SecurityLayer" -Value 0 -Force
+
+          # Configure firewall
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Optimize RDP Performance
+        run: |
+          # Tes optimisations existantes
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "MaxMonitors" -Value 4
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "MaxXResolution" -Value 1920
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "MaxYResolution" -Value 1080
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "ColorDepth" -Value 32
+
+          # Désactiver les effets visuels
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
+                           -Name "fDisableWallpaper" -Value 1
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
+                           -Name "fDisableFullWindowDrag" -Value 1
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
+                           -Name "fDisableMenuAnims" -Value 1
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' `
+                           -Name "fDisableCursorSetting" -Value 0
+
+          # Améliorer la réactivité de la souris
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                           -Name "MouseCursorHook" -Value 1
+
+          Restart-Service -Name "TermService" -Force
+          Restart-Service -Name "UmRdpService" -Force
+
+      - name: Create RDP User with Secure Password
+        run: |
+          # Generate secure password (ta méthode excellente)
+          $charSet = @{
+              Upper   = [char[]](65..90)
+              Lower   = [char[]](97..122)
+              Number  = [char[]](48..57)
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126))
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Create user
+          New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
+          
+          # Store credentials
+          echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+      - name: Install and Configure Tailscale
+        run: |
+          # Download and install Tailscale
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", ""$installerPath"", "/quiet", "/norestart") -Wait -NoNewWindow
+          Remove-Item $installerPath -Force
+          
+          # Wait for installation to complete
+          Start-Sleep -Seconds 10
+          
+          # Connect to Tailscale avec exit node
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=github-runner-$env:GITHUB_RUN_ID --accept-routes --advertise-exit-node
+
+      - name: Setup SOCKS5 Proxy
+        run: |
+          # Télécharger et installer un proxy SOCKS5 léger
+          $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
+          $proxyPath = "$env:TEMP\ss.zip"
+          
+          Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
+          Expand-Archive -Path $proxyPath -DestinationPath "C:\ss\" -Force
+          Remove-Item $proxyPath -Force
+          
+          # Configuration automatique
+          $config = @{
+              server = "0.0.0.0"
+              server_port = 1080
+              local_port = 1080
+              password = "proxy123"
+              method = "chacha20-ietf-poly1305"
+              timeout = 300
+          } | ConvertTo-Json | Out-File "C:\ss\config.json" -Encoding ascii
+          
+          # Démarrer le proxy
+          Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
+          
+          echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
+
+      - name: Get Connection Information
+        run: |
+          $retries = 0
+          $maxRetries = 10
+          $tsIP = $null
+          
+          while (-not $tsIP -and $retries -lt $maxRetries) {
+              Start-Sleep -Seconds 5
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Failed to get Tailscale IP"
+              exit 1
+          }
+          
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Display Connection Information
+        run: |
+          Write-Host "`n"
+          Write-Host "================================================"
+          Write-Host "🚀 RDP + SOCKS5 PROXY READY - OPTIMIZED"
+          Write-Host "================================================"
+          Write-Host "📡 RDP Access:"
+          Write-Host "   IP Address: $env:TAILSCALE_IP"
+          Write-Host "   Username: $env:RDP_USER"
+          Write-Host "   Password: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "🔌 SOCKS5 Proxy:"
+          Write-Host "   Server: $env:TAILSCALE_IP"
+          Write-Host "   Port: 1080"
+          Write-Host "   Password: $env:SOCKS5_PASSWORD"
+          Write-Host "   Method: chacha20-ietf-poly1305"
+          Write-Host ""
+          Write-Host "🌐 Exit Node:"
+          Write-Host "   Use as Exit Node: tailscale up --exit-node=$env:TAILSCALE_IP"
+          Write-Host "================================================"
+          Write-Host "`n"
+
+      - name: Keep Session Active
+        run: |
+          Write-Host "✅ RDP + Proxy Session Active"
+          Write-Host "Press 'Cancel' in GitHub to terminate"
+          
+          $counter = 0
+          while ($true) {
+              $counter++
+              $currentTime = Get-Date -Format "HH:mm:ss"
+              if ($counter % 10 -eq 0) {
+                  Write-Host "[$currentTime] Session active - $counter minutes"
+                  # Vérifier que le proxy tourne toujours
+                  $proxyProcess = Get-Process -Name "shadowsocks" -ErrorAction SilentlyContinue
+                  if (-not $proxyProcess) {
+                      Write-Host "🔄 Restarting SOCKS5 proxy..."
+                      Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
+                  }
+              }
+              Start-Sleep -Seconds 60
+          }
