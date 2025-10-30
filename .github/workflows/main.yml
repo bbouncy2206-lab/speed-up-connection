@@ -10,39 +10,29 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          # Configure firewall
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
       - name: Optimize RDP Performance
         run: |
-          # Optimisations RDP
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1920
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 1080
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "ColorDepth" -Value 32
-
-          # Désactiver les effets visuels
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableWallpaper" -Value 1
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableFullWindowDrag" -Value 1
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableMenuAnims" -Value 1
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableCursorSetting" -Value 0
-
-          # Améliorer la réactivité
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MouseCursorHook" -Value 1
-
           Restart-Service -Name "TermService" -Force
           Restart-Service -Name "UmRdpService" -Force
 
       - name: Create RDP User with Secure Password
         run: |
-          # Generate secure password
           $charSet = @{
               Upper   = [char[]](65..90)
               Lower   = [char[]](97..122)
@@ -56,43 +46,29 @@ jobs:
           $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          # Create user
           New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
-          
-          # Store credentials
           echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
       - name: Install and Configure Tailscale
         run: |
-          # Download and install Tailscale - CORRIGÉ
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-          
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
-          
-          # Wait for installation to complete
           Start-Sleep -Seconds 15
-          
-          # Connect to Tailscale avec exit node
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=github-runner-$env:GITHUB_RUN_ID --accept-routes --advertise-exit-node
 
       - name: Setup SOCKS5 Proxy
         run: |
-          # Télécharger et installer un proxy SOCKS5 léger
           $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
           $proxyPath = "$env:TEMP\ss.zip"
-          
           Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
           Expand-Archive -Path $proxyPath -DestinationPath "C:\ss\" -Force
           Remove-Item $proxyPath -Force
-          
-          # Configuration automatique
           $config = @{
               server = "0.0.0.0"
               server_port = 1080
@@ -101,10 +77,7 @@ jobs:
               method = "chacha20-ietf-poly1305"
               timeout = 300
           } | ConvertTo-Json | Out-File "C:\ss\config.json" -Encoding ascii
-          
-          # Démarrer le proxy
           Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
-          
           echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
 
       - name: Get Connection Information
@@ -112,19 +85,16 @@ jobs:
           $retries = 0
           $maxRetries = 10
           $tsIP = $null
-          
-          while (-not $tsIP -and $retries -lt $maxRetries) {
+          while ((-not $tsIP) -and ($retries -lt $maxRetries)) {
               Start-Sleep -Seconds 5
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
               $retries++
-              Write-Host "Attempt $retries: $tsIP"
+              Write-Host "Attempt $retries : $tsIP"
           }
-          
           if (-not $tsIP) {
               Write-Error "Failed to get Tailscale IP"
               exit 1
           }
-          
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Display Connection Information
@@ -152,17 +122,14 @@ jobs:
         run: |
           Write-Host "✅ RDP + Proxy Session Active"
           Write-Host "Press 'Cancel' in GitHub to terminate"
-          
           $counter = 0
           while ($true) {
               $counter++
-              $currentTime = Get-Date -Format "HH:mm:ss"
               if ($counter % 10 -eq 0) {
-                  Write-Host "[$currentTime] Session active - $counter minutes"
-                  # Vérifier que le proxy tourne toujours
+                  Write-Host "Session active - $counter minutes"
                   $proxyProcess = Get-Process -Name "shadowsocks" -ErrorAction SilentlyContinue
                   if (-not $proxyProcess) {
-                      Write-Host "🔄 Restarting SOCKS5 proxy..."
+                      Write-Host "Restarting SOCKS5 proxy..."
                       Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
                   }
               }
