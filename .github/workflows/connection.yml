@@ -1,0 +1,81 @@
+name: RDP + SOCKS5 Proxy - No Errors
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp-proxy:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure RDP (No Restart)
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create RDP User
+        run: |
+          $password = "Pass123!"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDPUser"
+          echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Start-Sleep -Seconds 10
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --advertise-exit-node --accept-routes
+          Start-Sleep -Seconds 5
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Setup Simple SOCKS5 Proxy
+        run: |
+          $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
+          Invoke-WebRequest -Uri $proxyUrl -OutFile "$env:TEMP\ss.zip"
+          Expand-Archive -Path "$env:TEMP\ss.zip" -DestinationPath "C:\ss\" -Force
+          
+          $configContent = @'
+{
+  "server": "0.0.0.0",
+  "server_port": 1080,
+  "password": "proxy123",
+  "method": "aes-256-gcm"
+}
+'@
+          $configContent | Out-File "C:\ss\config.json" -Encoding ascii
+          
+          Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
+          echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
+
+      - name: Show Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "================================================"
+          Write-Host "🚀 READY - CONNECT NOW!"
+          Write-Host "================================================"
+          Write-Host "RDP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "SOCKS5: $env:TAILSCALE_IP:1080"
+          Write-Host "Pass: proxy123"
+          Write-Host ""
+          Write-Host "Exit Node: tailscale up --exit-node=$env:TAILSCALE_IP --reset"
+          Write-Host "================================================"
+
+      - name: Keep Alive
+        run: |
+          Write-Host "🟢 Session active for 6 hours..."
+          Start-Sleep -Seconds 21600
