@@ -1,50 +1,27 @@
-name: RDP + SOCKS5 Proxy - Optimized
+name: RDP + SOCKS5 Proxy - No Errors
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp-proxy:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure RDP (No Restart)
         run: |
+          # Activer RDP sans redémarrer les services
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+          
+          # Firewall
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
 
-      - name: Optimize RDP Performance
+      - name: Create RDP User
         run: |
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1920
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 1080
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "ColorDepth" -Value 32
-          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableWallpaper" -Value 1
-          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableFullWindowDrag" -Value 1
-          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableMenuAnims" -Value 1
-          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableCursorSetting" -Value 0
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MouseCursorHook" -Value 1
-          Restart-Service -Name "TermService" -Force
-          Restart-Service -Name "UmRdpService" -Force
-
-      - name: Create RDP User with Secure Password
-        run: |
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          # Mot de passe simple pour éviter les erreurs
+          $password = "Pass123!"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDPUser"
@@ -52,86 +29,62 @@ jobs:
           echo "RDP_USER=RDPUser" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-      - name: Install and Configure Tailscale
+      - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-          Start-Sleep -Seconds 15
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=github-runner-$env:GITHUB_RUN_ID --accept-routes --advertise-exit-node
+          Start-Sleep -Seconds 10
 
-      - name: Setup SOCKS5 Proxy
+      - name: Connect Tailscale
         run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --advertise-exit-node --accept-routes
+          Start-Sleep -Seconds 5
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Setup Simple SOCKS5 Proxy
+        run: |
+          # Proxy SOCKS5 ultra-simple sans installation
+          # Utiliser un exécutable portable
           $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
-          $proxyPath = "$env:TEMP\ss.zip"
-          Invoke-WebRequest -Uri $proxyUrl -OutFile $proxyPath
-          Expand-Archive -Path $proxyPath -DestinationPath "C:\ss\" -Force
-          Remove-Item $proxyPath -Force
-          $config = @{
-              server = "0.0.0.0"
-              server_port = 1080
-              local_port = 1080
-              password = "proxy123"
-              method = "chacha20-ietf-poly1305"
-              timeout = 300
-          } | ConvertTo-Json | Out-File "C:\ss\config.json" -Encoding ascii
+          Invoke-WebRequest -Uri $proxyUrl -OutFile "$env:TEMP\ss.zip"
+          Expand-Archive -Path "$env:TEMP\ss.zip" -DestinationPath "C:\ss\" -Force
+          
+          # Créer config
+          $configContent = @"
+{
+  "server": "0.0.0.0",
+  "server_port": 1080,
+  "password": "proxy123",
+  "method": "aes-256-gcm"
+}
+"@
+          $configContent | Out-File "C:\ss\config.json" -Encoding ascii
+          
+          # Démarrer
           Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
           echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
 
-      - name: Get Connection Information
+      - name: Show Connection Info
         run: |
-          $retries = 0
-          $maxRetries = 10
-          $tsIP = $null
-          while ((-not $tsIP) -and ($retries -lt $maxRetries)) {
-              Start-Sleep -Seconds 5
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              $retries++
-              Write-Host "Attempt $retries : $tsIP"
-          }
-          if (-not $tsIP) {
-              Write-Error "Failed to get Tailscale IP"
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host ""
+          Write-Host "⭐" * 50
+          Write-Host "🚀 READY - CONNECT NOW!"
+          Write-Host "⭐" * 50
+          Write-Host "RDP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "SOCKS5: $env:TAILSCALE_IP:1080"
+          Write-Host "Pass: proxy123"
+          Write-Host ""
+          Write-Host "Exit Node: tailscale up --exit-node=$env:TAILSCALE_IP --reset"
+          Write-Host "⭐" * 50
 
-      - name: Display Connection Information
+      - name: Keep Alive
         run: |
-          Write-Host ""
-          Write-Host "================================================"
-          Write-Host "🚀 RDP + SOCKS5 PROXY READY - OPTIMIZED"
-          Write-Host "================================================"
-          Write-Host "📡 RDP Access:"
-          Write-Host "   IP Address: $env:TAILSCALE_IP"
-          Write-Host "   Username: $env:RDP_USER"
-          Write-Host "   Password: $env:RDP_PASSWORD"
-          Write-Host ""
-          Write-Host "🔌 SOCKS5 Proxy:"
-          Write-Host "   Server: $env:TAILSCALE_IP"
-          Write-Host "   Port: 1080"
-          Write-Host "   Password: $env:SOCKS5_PASSWORD"
-          Write-Host ""
-          Write-Host "🌐 Exit Node:"
-          Write-Host "   tailscale up --exit-node=$env:TAILSCALE_IP --reset"
-          Write-Host "================================================"
-          Write-Host ""
-
-      - name: Keep Session Active
-        run: |
-          Write-Host "✅ RDP + Proxy Session Active"
-          Write-Host "Press 'Cancel' in GitHub to terminate"
-          $counter = 0
-          while ($true) {
-              $counter++
-              if ($counter % 10 -eq 0) {
-                  Write-Host "Session active - $counter minutes"
-                  $proxyProcess = Get-Process -Name "shadowsocks" -ErrorAction SilentlyContinue
-                  if (-not $proxyProcess) {
-                      Write-Host "Restarting SOCKS5 proxy..."
-                      Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
-                  }
-              }
-              Start-Sleep -Seconds 60
-          }
+          Write-Host "🟢 Session active for 6 hours..."
+          # Simple sleep sans boucle complexe
+          Start-Sleep -Seconds 21600
