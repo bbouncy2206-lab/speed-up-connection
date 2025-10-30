@@ -1,0 +1,49 @@
+name: 1Gbps Proxy via Tailscale
+on: [workflow_dispatch]
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Tailscale
+      run: |
+        curl -fsSL https://tailscale.com/install.sh | sh
+        tailscale up --authkey=${{ secrets.TAILSCALE_KEY }} --advertise-exit-node --accept-routes
+        
+    - name: Setup SOCKS5 Proxy
+      run: |
+        # Installer Dante SOCKS5
+        sudo apt-get update
+        sudo apt-get install -y dante-server
+        
+        # Configuration SOCKS5 simple
+        sudo tee /etc/danted.conf > /dev/null << EOF
+        logoutput: /var/log/sockd.log
+        internal: 0.0.0.0 port = 1080
+        external: tailscale0
+        method: username none
+        user.privileged: root
+        user.notprivileged: nobody
+        client pass {
+            from: 0.0.0.0/0 to: 0.0.0.0/0
+        }
+        pass {
+            from: 0.0.0.0/0 to: 0.0.0.0/0
+            protocol: tcp udp
+        }
+        EOF
+        
+        # Démarrer le serveur SOCKS
+        sudo systemctl restart danted
+        echo " SOCKS5 server running on port 1080"
+        
+    - name: Show Connection Info
+      run: |
+        echo " Tailscale IP: $(tailscale ip --4)"
+        echo " Tailscale status:"
+        tailscale status
+        
+    - name: Keep alive
+      run: |
+        echo " donne Proxy ready! Connect via Tailscale IP above"
+        sleep 21600  # 6 heures max
