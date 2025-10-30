@@ -10,17 +10,13 @@ jobs:
     steps:
       - name: Configure RDP (No Restart)
         run: |
-          # Activer RDP sans redémarrer les services
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          
-          # Firewall
           netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
 
       - name: Create RDP User
         run: |
-          # Mot de passe simple pour éviter les erreurs
           $password = "Pass123!"
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           New-LocalUser -Name "RDPUser" -Password $securePass -AccountNeverExpires
@@ -46,33 +42,29 @@ jobs:
 
       - name: Setup Simple SOCKS5 Proxy
         run: |
-          # Proxy SOCKS5 ultra-simple sans installation
-          # Utiliser un exécutable portable
           $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
           Invoke-WebRequest -Uri $proxyUrl -OutFile "$env:TEMP\ss.zip"
           Expand-Archive -Path "$env:TEMP\ss.zip" -DestinationPath "C:\ss\" -Force
           
-          # Créer config
-          $configContent = @"
+          $configContent = @'
 {
   "server": "0.0.0.0",
   "server_port": 1080,
   "password": "proxy123",
   "method": "aes-256-gcm"
 }
-"@
+'@
           $configContent | Out-File "C:\ss\config.json" -Encoding ascii
           
-          # Démarrer
           Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
           echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
 
       - name: Show Connection Info
         run: |
           Write-Host ""
-          Write-Host "⭐" * 50
+          Write-Host "================================================"
           Write-Host "🚀 READY - CONNECT NOW!"
-          Write-Host "⭐" * 50
+          Write-Host "================================================"
           Write-Host "RDP: $env:TAILSCALE_IP"
           Write-Host "User: $env:RDP_USER"
           Write-Host "Pass: $env:RDP_PASSWORD"
@@ -81,10 +73,9 @@ jobs:
           Write-Host "Pass: proxy123"
           Write-Host ""
           Write-Host "Exit Node: tailscale up --exit-node=$env:TAILSCALE_IP --reset"
-          Write-Host "⭐" * 50
+          Write-Host "================================================"
 
       - name: Keep Alive
         run: |
           Write-Host "🟢 Session active for 6 hours..."
-          # Simple sleep sans boucle complexe
           Start-Sleep -Seconds 21600
