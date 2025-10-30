@@ -8,7 +8,7 @@ jobs:
     - name: Install Tailscale
       run: |
         curl -fsSL https://tailscale.com/install.sh | sh
-        tailscale up --authkey=${{ secrets.TAILSCALE_KEY }} --advertise-exit-node --accept-routes
+        sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --advertise-exit-node --accept-routes
         
     - name: Setup SOCKS5 Proxy
       run: |
@@ -35,15 +35,15 @@ jobs:
         
         # Démarrer le serveur SOCKS
         sudo systemctl restart danted
-        echo " SOCKS5 server running on port 1080"
+        echo "✅ SOCKS5 server running on port 1080"
         
     - name: Show Connection Info
       run: |
-        echo " Tailscale IP: $(tailscale ip --4)"
-        echo " Tailscale status:"
+        echo "🎯 Tailscale IP: $(tailscale ip --4)"
+        echo "🌐 Tailscale status:"
         tailscale status
         
     - name: Keep alive
       run: |
-        echo " donne Proxy ready! Connect via Tailscale IP above"
+        echo "🚀 Proxy ready! Connect via Tailscale IP above"
         sleep 21600  # 6 heures max
