@@ -1,4 +1,4 @@
-name: RDP + SOCKS5 Proxy - No Errors
+name: RDP + SOCKS5 Proxy - Final
 on:
   workflow_dispatch:
 
@@ -8,7 +8,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Configure RDP (No Restart)
+      - name: Configure RDP
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
@@ -40,21 +40,15 @@ jobs:
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Setup Simple SOCKS5 Proxy
+      - name: Setup SOCKS5 Proxy
         run: |
           $proxyUrl = "https://github.com/shadowsocks/shadowsocks-windows/releases/download/4.4.1.0/Shadowsocks-4.4.1.0.zip"
           Invoke-WebRequest -Uri $proxyUrl -OutFile "$env:TEMP\ss.zip"
           Expand-Archive -Path "$env:TEMP\ss.zip" -DestinationPath "C:\ss\" -Force
           
-          $configContent = @'
-{
-  "server": "0.0.0.0",
-  "server_port": 1080,
-  "password": "proxy123",
-  "method": "aes-256-gcm"
-}
-'@
-          $configContent | Out-File "C:\ss\config.json" -Encoding ascii
+          # Créer le fichier config avec une méthode simple
+          $config = '{"server":"0.0.0.0","server_port":1080,"password":"proxy123","method":"aes-256-gcm"}'
+          $config | Out-File "C:\ss\config.json" -Encoding ascii
           
           Start-Process -FilePath "C:\ss\shadowsocks.exe" -ArgumentList "-c", "config.json" -WorkingDirectory "C:\ss"
           echo "SOCKS5_PASSWORD=proxy123" >> $env:GITHUB_ENV
@@ -66,7 +60,7 @@ jobs:
           Write-Host "🚀 READY - CONNECT NOW!"
           Write-Host "================================================"
           Write-Host "RDP: $env:TAILSCALE_IP"
-          Write-Host "User: $env:RDP_USER"
+          Write-Host "User: $env:RDP_USER" 
           Write-Host "Pass: $env:RDP_PASSWORD"
           Write-Host ""
           Write-Host "SOCKS5: $env:TAILSCALE_IP:1080"
